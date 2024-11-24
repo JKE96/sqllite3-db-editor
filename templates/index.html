@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQLite3 DB Editor</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
+    <style>
+        #update-message, #error-message {
+            display: none;
+            margin-top: 10px;
+        }
+        .selected {
+            background-color: #f2dede;
+        }
+        .selectable {
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SQLite3 DB Editor</h1>
+        <div id="update-message" class="alert alert-success">Update successful</div>
+        <div id="error-message" class="alert alert-danger">Error occurred</div>
+        <button id="allow-delete" class="btn btn-warning" style="display:none;">Allow Deleting Rows</button>
+        <button id="delete-rows" class="btn btn-danger" style="display:none;">Delete Selected Rows</button>
+        <button id="add-row" class="btn btn-primary" style="display:none;">Add New Row</button>
+        <div id="tables-list">
+            <h2>Tables</h2>
+            <ul>
+                {% for table in tables %}
+                    <li><a href="#" class="table-link" data-table="{{ table['name'] }}">{{ table['name'] }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div id="table-data"></div>
+    </div>
+
+    <script>
+        var currentTableName = '';
+        var deleteMode = false;
+        var dropdownColumns = ['connection', 'cable_id']; // List of columns that should have dropdowns
+
+        $(document).ready(function() {
+            $('.table-link').click(function(e) {
+                e.preventDefault();
+                currentTableName = $(this).data('table');
+                $('.table-link').removeClass('active');
+                $(this).addClass('active');
+                $.getJSON('/table/' + currentTableName, function(data) {
+                    var tableHtml = '<table class="table table-bordered"><thead><tr>';
+                    $.each(data.columns, function(index, column) {
+                        tableHtml += '<th>' + column + '</th>';
+                    });
+                    tableHtml += '</tr></thead><tbody>';
+                    $.each(data.rows, function(index, row) {
+                        tableHtml += '<tr>';
+                        $.each(data.columns, function(index, column) {
+                            if (dropdownColumns.includes(column)) {
+                                tableHtml += '<td data-column="' + column + '" data-id="' + row.id + '"><select class="form-control">';
+                                $.ajax({
+                                    url: '/options/' + currentTableName + '/' + column,
+                                    method: 'GET',
+                                    async: false,
+                                    success: function(options) {
+                                        $.each(options, function(index, option) {
+                                            var selected = option === row[column] ? 'selected' : '';
+                                            tableHtml += '<option value="' + option + '" ' + selected + '>' + option + '</option>';
+                                        });
+                                    }
+                                });
+                                tableHtml += '</select></td>';
+                            } else {
+                                tableHtml += '<td contenteditable="true" data-column="' + column + '" data-id="' + row.id + '">' + row[column] + '</td>';
+                            }
+                        });
+                        tableHtml += '</tr>';
+                    });
+                    tableHtml += '</tbody></table>';
+                    $('#table-data').html(tableHtml);
+                    $('#allow-delete').show();
+                    $('#add-row').show();
+                    $('#delete-rows').hide();
+                    deleteMode = false;
+                });
+            });
+
+            $(document).on('focus', 'td[contenteditable="true"]', function() {
+                $(this).data('original-text', $(this).text());
+            });
+
+            $(document).on('blur', 'td[contenteditable="true"]', function() {
+                var originalText = $(this).data('original-text');
+                var newText = $(this).text();
+                if (originalText === newText) {
+                    return;
+                }
+                var column = $(this).data('column');
+                var value = newText;
+                var rowId = $(this).data('id');
+                $.ajax({
+                    url: '/update',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        table: currentTableName,
+                        column: column,
+                        value: value,
+                        id: rowId
+                    }),
+                    success: function(response) {
+                        if (response.status === 'success') {
+                            $('#update-message').fadeIn().delay(1000).fadeOut();
+                        } else {
+                            $('#error-message').text('Update failed: ' + response.message).fadeIn().delay(3000).fadeOut();
+                        }
+                    },
+                    error: function(xhr) {
+                        $('#error-message').text('Update failed: ' + xhr.responseText).fadeIn().delay(3000).fadeOut();
+                    }
+                });
+            });
+
+            $(document).on('change', 'select', function() {
+                var column = $(this).closest('td').data('column');
+                var value = $(this).val();
+                var rowId = $(this).closest('td').data('id');
+                $.ajax({
+                    url: '/update',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        table: currentTableName,
+                        column: column,
+                        value: value,
+                        id: rowId
+                    }),
+                    success: function(response) {
+                        if (response.status === 'success') {
+                            $('#update-message').fadeIn().delay(1000).fadeOut();
+                        } else {
+                            $('#error-message').text('Update failed: ' + response.message).fadeIn().delay(3000).fadeOut();
+                        }
+                    },
+                    error: function(xhr) {
+                        $('#error-message').text('Update failed: ' + xhr.responseText).fadeIn().delay(3000).fadeOut();
+                    }
+                });
+            });
+
+            $(document).on('click', 'tr.selectable', function() {
+                if (deleteMode) {
+                    $(this).toggleClass('selected');
+                    if ($('tr.selected').length > 0) {
+                        $('#delete-rows').show();
+                    } else {
+                        $('#delete-rows').hide();
+                    }
+                }
+            });
+
+            $('#allow-delete').click(function() {
+                deleteMode = !deleteMode;
+                if (deleteMode) {
+                    $('tr').addClass('selectable');
+                } else {
+                    $('tr').removeClass('selectable selected');
+                    $('#delete-rows').hide();
+                }
+            });
+
+            $('#delete-rows').click(function() {
+                var ids = [];
+                $('tr.selected').each(function() {
+                    ids.push($(this).find('td').first().data('id'));
+                });
+                $.ajax({
+                    url: '/delete',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        table: currentTableName,
+                        ids: ids
+                    }),
+                    success: function(response) {
+                        if (response.status === 'success') {
+                            $('tr.selected').remove();
+                            $('#delete-rows').hide();
+                        } else {
+                            $('#error-message').text('Delete failed: ' + response.message).fadeIn().delay(3000).fadeOut();
+                        }
+                    }
+                });
+            });
+
+            $('#add-row').click(function() {
+                $.ajax({
+                    url: '/add',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        table: currentTableName
+                    }),
+                    success: function(response) {
+                        if (response.status === 'success') {
+                            var newRowHtml = '<tr data-id="' + response.id + '">';
+                            var columns = $('#table-data table thead th').map(function() {
+                                return $(this).text();
+                            }).get();
+
+                            var requests = columns.map(function(column) {
+                                return $.getJSON('/options/' + currentTableName + '/' + column);
+                            });
+
+                            $.when.apply($, requests).done(function() {
+                                var responses = arguments;
+                                columns.forEach(function(column, index) {
+                                    if (dropdownColumns.includes(column)) {
+                                        var options = responses[index][0];
+                                        var selectHtml = '<select class="form-control">';
+                                        options.forEach(function(option) {
+                                            selectHtml += '<option value="' + option + '">' + option + '</option>';
+                                        });
+                                        selectHtml += '</select>';
+                                        newRowHtml += '<td data-column="' + column + '" data-id="' + response.id + '">' + selectHtml + '</td>';
+                                    } else if (column === 'id') {
+                                        newRowHtml += '<td data-column="' + column + '" data-id="' + response.id + '">' + response.id + '</td>';
+                                    } else {
+                                        newRowHtml += '<td contenteditable="true" data-column="' + column + '" data-id="' + response.id + '"></td>';
+                                    }
+                                });
+                                newRowHtml += '</tr>';
+                                $('#table-data table tbody').append(newRowHtml);
+                            });
+                        } else {
+                            $('#error-message').text('Add failed: ' + response.message).fadeIn().delay(3000).fadeOut();
+                        }
+                    },
+                    error: function(xhr) {
+                        $('#error-message').text('Add failed: ' + xhr.responseText).fadeIn().delay(3000).fadeOut();
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
