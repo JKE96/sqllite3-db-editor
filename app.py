@@ -4,7 +4,7 @@ import sqlite3
 app = Flask(__name__)
 
 def get_db_connection():
-    conn = sqlite3.connect('database.db')
+    conn = sqlite3.connect('interfaces.db')
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -73,10 +73,22 @@ def add_row():
     
     # Create a dictionary with default values for NOT NULL columns
     default_values = {col: '' for col in not_null_columns}
-    
     columns = ', '.join(default_values.keys())
     placeholders = ', '.join(['?'] * len(default_values))
-    cursor.execute(f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})', list(default_values.values()))
+
+    all_text_columns = [col['name'] for col in columns_info if col['type'] =='TEXT']
+    default_text_values = {col: '' for col in all_text_columns}
+    text_columns = ', '.join(default_text_values.keys())
+    text_placeholders = ', '.join(['?'] * len(default_text_values))
+    
+    if(len(placeholders) > 0 ):
+        cursor.execute(f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})', list(default_values.values()))
+    elif (len(text_placeholders) > 0):
+        cursor.execute(f'INSERT INTO {table_name} ({text_columns}) VALUES ({text_placeholders})', list(default_text_values.values()))
+    else:
+        conn.close()
+        #TODO, prevent failing with only integer columns
+        return jsonify({'status': 'error', 'message': 'No row with text data for initialization'}), 400
     
     conn.commit()
     row_id = cursor.lastrowid
